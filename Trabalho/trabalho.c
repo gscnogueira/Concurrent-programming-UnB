@@ -14,16 +14,17 @@
 #define N_ANC_A 10	//número de ansiões da ilha A
 #define N_ANC_B 10	//número de ansiões da ilha B
 
-#define BARRIL  15 //Capacidade de frutas por caixa
+#define CAPACIDADE_A  15 // Capacidade do navio para bens produzidos na ilha A
+#define CAPACIDADE_B  15 // Capacidade do navio para bens produzidos na ilha B
 
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t cheio_A = PTHREAD_COND_INITIALIZER;
-pthread_cond_t vazio_A = PTHREAD_COND_INITIALIZER;
-pthread_cond_t cheio_B = PTHREAD_COND_INITIALIZER;
-pthread_cond_t vazio_B = PTHREAD_COND_INITIALIZER;
+pthread_cond_t zarpar_A = PTHREAD_COND_INITIALIZER;
+pthread_cond_t habitantes_A = PTHREAD_COND_INITIALIZER;
+pthread_cond_t zarpar_B = PTHREAD_COND_INITIALIZER;
+pthread_cond_t habitantes_B = PTHREAD_COND_INITIALIZER;
 
-int barril_A=0;
-int barril_B=0;
+int estoque_A=0;
+int estoque_B=15;
 int navio_em_a = 1;
 int navio_em_b = 0;
 
@@ -96,8 +97,7 @@ void * f_navio(void *arg){
     pthread_mutex_lock(&mutex);
 
     // Navio aguarda ficar cheio em A
-    while(barril_A < BARRIL)
-      pthread_cond_wait(&cheio_A, &mutex);
+    pthread_cond_wait(&zarpar_A, &mutex);
 
     // Navio parte para B
     printf("Navio: partindo (sentido A->B)\n");
@@ -109,18 +109,11 @@ void * f_navio(void *arg){
     navio_em_b = 1;
     sleep(2);
 
-    // Navio descarrega mercadorias
-    printf("Navio: descarregando....\n");
-    sleep(5);
-    barril_A=0;
-
     // Habitantes de B são liberados para abastecer o navio
-    pthread_cond_broadcast(&vazio_B);
+    pthread_cond_broadcast(&habitantes_B);
 
-    // Navio aguarda ficar cheio em B
-    while(barril_A < BARRIL){
-      pthread_cond_wait(&cheio_B, &mutex);
-    }
+    // Navio aguarda todas as trocas serem feitas para zarpar
+    pthread_cond_wait(&zarpar_B, &mutex);
 
     // Navio parte para A
     printf("Navio: partindo (sentido B->A)\n");
@@ -132,12 +125,8 @@ void * f_navio(void *arg){
     navio_em_a = 1;
     sleep(2);
 
-    // Navio descarrega mercadorias
-    printf("Navio: descarregando....\n");
-    barril_A=0;
-
-    // Habitantes de B são liberados para abastecer o navio
-    pthread_cond_broadcast(&vazio_A);
+    // Habitantes de A são liberados para abastecer o navio
+    pthread_cond_broadcast(&habitantes_A);
 
     pthread_mutex_unlock(&mutex);
   }
@@ -156,19 +145,20 @@ void * f_habitanteA(void *arg){
 			
 
     // Caso o navio  esteja cheio ou não esteja em A, o habitante espera;
-    while( barril_A == BARRIL || !navio_em_a){
+    while( estoque_A == CAPACIDADE_A || !navio_em_a || estoque_B == 0){
     printf("Habitante %d (ilha A): esperando...\n", id);
-      pthread_cond_wait(&vazio_A, &mutex);
+      pthread_cond_wait(&habitantes_A, &mutex);
     }
 
     // Habitante abastece navio navio
-    barril_A++;
-    printf("Habitante %d (ilha A): abastece navio com fruta (%d frutas)\n", id, barril_A);
+    estoque_A++;
+    estoque_B--;
+    printf("Habitante %d (ilha A): abastece navio com fruta (A:%d; B:%d)\n", id, estoque_A, estoque_B);
 
 
     // Caso navio atinja sua capacidade, ele é liberado para zarpar
-    if ( barril_A == BARRIL){
-      pthread_cond_signal(&cheio_A);
+    if ( estoque_A == CAPACIDADE_A || estoque_B == 0){
+      pthread_cond_signal(&zarpar_A);
     }
 
     pthread_mutex_unlock(&mutex);
@@ -187,20 +177,20 @@ void * f_habitanteB(void *arg){
 
     pthread_mutex_lock(&mutex);
 			
-    // Caso o navio  esteja cheio ou não esteja em B, o habitante espera;
-    while( barril_A == BARRIL | !navio_em_b){
+    // Caso o não haja mais frutas para trocar, o  estoque esteja cheio ou  o navio não está em B, o habitante espera
+    while( estoque_B == CAPACIDADE_B | !navio_em_b | estoque_A == 0){
       printf("Habitante %d (ilha B): esperando...\n", id);
-      pthread_cond_wait(&vazio_B, &mutex);
+      pthread_cond_wait(&habitantes_B, &mutex);
     }
 
     // Habitante abastece navio navio
-    barril_A++;
-    printf("Habitante %d (ilha B): abastece navio com fruta (%d frutas)\n", id, barril_A);
-
+    estoque_B++;
+    estoque_A--;
+    printf("Habitante %d (ilha B): abastece navio com fruta (A:%d; B:%d)\n", id, estoque_A, estoque_B);
 
     // Caso navio atinja sua capacidade, ele é liberado para zarpar
-    if ( barril_A == BARRIL){
-      pthread_cond_signal(&cheio_B);
+    if ( estoque_B == CAPACIDADE_B | estoque_A == 0){
+      pthread_cond_signal(&zarpar_B);
     }
 
     pthread_mutex_unlock(&mutex);
@@ -211,6 +201,36 @@ void * f_habitanteB(void *arg){
 
 void * f_ansiaoA(void *arg){
 
+  int id = *((int*)arg);
+  while(1){
+
+    // Habitante colhe fruta
+    printf("Ansião %d (ilha A): colhendo fruta...\n", id);
+    sleep(id%5+5);
+
+    pthread_mutex_lock(&mutex);
+			
+
+    // Caso o navio  esteja cheio ou não esteja em A, o habitante espera;
+    while( estoque_A == CAPACIDADE_A || !navio_em_a || estoque_B == 0){
+    printf("Ansião %d (ilha A): esperando...\n", id);
+      pthread_cond_wait(&habitantes_A, &mutex);
+    }
+
+    // Ansião abastece navio navio
+    estoque_A++;
+    estoque_B--;
+    printf("Ansião %d (ilha A): abastece navio com fruta (A:%d; B:%d)\n", id, estoque_A, estoque_B);
+
+
+    // Caso navio atinja sua capacidade, ele é liberado para zarpar
+    if ( estoque_A == CAPACIDADE_A || estoque_B == 0){
+      pthread_cond_signal(&zarpar_A);
+    }
+
+    pthread_mutex_unlock(&mutex);
+    sleep(3);
+  }
 }
 
 void * f_ansiaoB(void *arg){
